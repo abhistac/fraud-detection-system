@@ -1,0 +1,48 @@
+# Model Configuration  
+model:
+  test_size: 0.2
+  random_state: 42
+  cv_folds: 3
+
+# Feature Engineering
+features:
+  time_features: true
+  amount_features: true
+  pca_combinations: true
+  rolling_statistics: false
+
+# Model Parameters (Optimized for speed)
+models:
+  logistic_regression:
+    C: 0.1
+    class_weight: 'balanced'
+    max_iter: 500
+
+  random_forest:
+    n_estimators: 50
+    max_depth: 8
+    class_weight: 'balanced'
+
+  xgboost:
+    n_estimators: 100
+    max_depth: 6
+    learning_rate: 0.1
+    scale_pos_weight: 100
+
+  lightgbm:
+    n_estimators: 100
+    max_depth: 6
+    learning_rate: 0.1
+    class_weight: 'balanced'
+
+# Evaluation
+evaluation:
+  threshold_optimization: true
+  business_metrics: true
+  feature_importance: true
+
+# Business Parameters
+business:
+  investigation_cost_per_case: 50
+  fraud_prevention_value: 1.0
+  customer_friction_cost: 25

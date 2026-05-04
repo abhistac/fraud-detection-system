@@ -6,6 +6,40 @@ import logging
 class FeatureEngineer:
     def __init__(self, config):
         self.config = config
+        self._amount_percentile_bins = None
+        self._amount_high_threshold = None
+        self._fitted_columns = None
+
+    def fit(self, df):
+        """Learn statistics from training data to prevent data leakage."""
+        if self.config['features']['amount_features']:
+            self._amount_percentile_bins = np.percentile(df['Amount'], [25, 50, 75, 90, 95, 99])
+            self._amount_high_threshold = df['Amount'].quantile(0.95)
+        return self
+
+    def transform(self, df):
+        """Apply feature engineering using statistics learned from training data."""
+        df = self.create_time_features(df)
+        df = self.create_amount_features(df)
+        df = self.create_pca_combinations(df)
+        df = self.create_rolling_features(df)
+
+        for feature in ['Amount_percentile', 'Amount_category']:
+            if feature in df.columns:
+                df = pd.get_dummies(df, columns=[feature], prefix=feature)
+
+        df = df.fillna(0)
+
+        if self._fitted_columns is not None:
+            df = df.reindex(columns=self._fitted_columns, fill_value=0)
+        else:
+            self._fitted_columns = df.columns.tolist()
+
+        logging.info(f"Feature engineering complete. Shape: {df.shape}")
+        return df
+
+    def fit_transform(self, df):
+        return self.fit(df).transform(df)
 
     def create_time_features(self, df):
         if not self.config['features']['time_features']:
@@ -26,10 +60,14 @@ class FeatureEngineer:
         df = df.copy()
         df['Amount_log'] = np.log1p(df['Amount'])
 
-        amount_percentiles = np.percentile(df['Amount'], [25, 50, 75, 90, 95, 99])
+        bins = (
+            self._amount_percentile_bins
+            if self._amount_percentile_bins is not None
+            else np.percentile(df['Amount'], [25, 50, 75, 90, 95, 99])
+        )
         df['Amount_percentile'] = pd.cut(
             df['Amount'],
-            bins=[-np.inf] + list(amount_percentiles) + [np.inf],
+            bins=[-np.inf] + list(bins) + [np.inf],
             labels=range(7)
         )
         df['Amount_category'] = pd.cut(
@@ -37,7 +75,13 @@ class FeatureEngineer:
             bins=[0, 10, 50, 100, 500, 1000, np.inf],
             labels=['micro', 'small', 'medium', 'large', 'very_large', 'extreme']
         )
-        df['High_amount'] = (df['Amount'] > df['Amount'].quantile(0.95)).astype(int)
+
+        threshold = (
+            self._amount_high_threshold
+            if self._amount_high_threshold is not None
+            else df['Amount'].quantile(0.95)
+        )
+        df['High_amount'] = (df['Amount'] > threshold).astype(int)
         df['Zero_amount'] = (df['Amount'] == 0).astype(int)
         return df
 
@@ -70,20 +114,4 @@ class FeatureEngineer:
             df[f'Amount_rolling_std_{window}'] = df['Amount'].rolling(window=window, min_periods=1).std()
 
         df['Trans_frequency_1h'] = df.groupby(df['Time'] // 3600)['Time'].transform('count')
-        return df
-
-    def engineer_features(self, df):
-        logging.info("Starting feature engineering...")
-
-        df = self.create_time_features(df)
-        df = self.create_amount_features(df)
-        df = self.create_pca_combinations(df)
-        df = self.create_rolling_features(df)
-
-        for feature in ['Amount_percentile', 'Amount_category']:
-            if feature in df.columns:
-                df = pd.get_dummies(df, columns=[feature], prefix=feature)
-
-        df = df.fillna(0)
-        logging.info(f"Feature engineering complete. Shape: {df.shape}")
         return df

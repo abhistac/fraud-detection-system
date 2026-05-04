@@ -15,9 +15,11 @@ from utils import ModelEvaluator, BusinessMetricsCalculator
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+CONFIG_PATH = Path(__file__).parent.parent / 'config' / 'config.yaml'
+
 
 def load_config():
-    with open('config/config.yaml', 'r') as f:
+    with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
 
 
@@ -26,45 +28,42 @@ def download_data():
     print("https://www.kaggle.com/mlg-ulb/creditcardfraud")
     print("Save as: data/raw/creditcard.csv")
 
-    data_path = Path("data/raw/creditcard.csv")
+    data_path = Path(__file__).parent.parent / 'data' / 'raw' / 'creditcard.csv'
     if not data_path.exists():
         logging.warning("Dataset not found — generating sample data for demonstration")
-        create_sample_data()
+        create_sample_data(data_path)
 
     return str(data_path)
 
 
-def create_sample_data():
-    os.makedirs("data/raw", exist_ok=True)
+def create_sample_data(data_path):
+    data_path.parent.mkdir(parents=True, exist_ok=True)
 
-    np.random.seed(42)
-    n_samples = 10000
-    n_fraud = int(n_samples * 0.002)
+    rng = np.random.default_rng(42)
+    n_samples, n_fraud = 10000, 20
 
-    rows = []
-    for i in range(n_samples):
-        time = np.random.uniform(0, 172800)
-        v_features = np.random.normal(0, 1, 28)
-        if i < n_fraud:
-            amount = np.random.lognormal(3, 1.5)
-            v_features[:5] = np.random.normal(2, 1, 5)
-            class_label = 1
-        else:
-            amount = np.random.lognormal(2, 1)
-            class_label = 0
-        rows.append([time] + list(v_features) + [amount, class_label])
+    time = rng.uniform(0, 172800, n_samples)
+    v_features = rng.standard_normal((n_samples, 28))
+    amount = rng.lognormal(2, 1, n_samples)
+    labels = np.zeros(n_samples, dtype=int)
 
+    v_features[:n_fraud, :5] = rng.normal(2, 1, (n_fraud, 5))
+    amount[:n_fraud] = rng.lognormal(3, 1.5, n_fraud)
+    labels[:n_fraud] = 1
+
+    data = np.column_stack([time, v_features, amount, labels])
     columns = ['Time'] + [f'V{i}' for i in range(1, 29)] + ['Amount', 'Class']
-    df = pd.DataFrame(rows, columns=columns)
-    df.to_csv("data/raw/creditcard.csv", index=False)
+    df = pd.DataFrame(data, columns=columns)
+    df['Class'] = df['Class'].astype(int)
+    df.to_csv(data_path, index=False)
     logging.info(f"Sample data: {len(df)} rows, {df['Class'].sum()} fraud cases")
 
 
 def main():
     config = load_config()
 
-    os.makedirs("results", exist_ok=True)
-    os.makedirs("data/processed", exist_ok=True)
+    results_dir = Path(__file__).parent.parent / 'results'
+    results_dir.mkdir(exist_ok=True)
 
     data_path = download_data()
 
@@ -77,14 +76,26 @@ def main():
     logging.info("Loading data...")
     df = preprocessor.load_data(data_path)
     preprocessor.explore_data(df)
+    df = preprocessor.handle_missing_values(df)
 
-    logging.info("Preprocessing...")
-    df_clean = preprocessor.handle_missing_values(df)
+    # Split before feature engineering to prevent data leakage
+    X_train_raw, X_test_raw, y_train_raw, y_test_raw = preprocessor.split_data(df)
+
+    # Preserve original test amounts for business impact (before scaling)
+    test_amounts = X_test_raw['Amount'].values
 
     logging.info("Engineering features...")
-    df_featured = feature_engineer.engineer_features(df_clean)
+    df_train = X_train_raw.assign(Class=y_train_raw)
+    df_test = X_test_raw.assign(Class=y_test_raw)
 
-    X_train, X_test, y_train, y_test = preprocessor.split_data(df_featured)
+    df_train_featured = feature_engineer.fit_transform(df_train)
+    df_test_featured = feature_engineer.transform(df_test)
+
+    X_train = df_train_featured.drop('Class', axis=1)
+    y_train = df_train_featured['Class'].astype(int)
+    X_test = df_test_featured.drop('Class', axis=1)
+    y_test = df_test_featured['Class'].astype(int)
+
     X_train_scaled, X_test_scaled = preprocessor.scale_features(X_train, X_test)
 
     logging.info("Training models...")
@@ -108,31 +119,31 @@ def main():
         ensemble['y_true'],
         ensemble['y_pred'],
         ensemble['y_proba'],
-        X_test['Amount'].values
+        test_amounts
     )
 
     _, optimal_threshold = business_calculator.threshold_optimization(
         ensemble['y_true'],
         ensemble['y_proba'],
-        X_test['Amount'].values
+        test_amounts
     )
 
     logging.info(f"Optimal threshold: {optimal_threshold:.3f}")
     logging.info(f"Net benefit: ${business_metrics['net_benefit']:,.0f}")
 
     logging.info("Generating visualizations...")
-    evaluator.plot_roc_curves(model_results, 'results/roc_curves.png')
-    evaluator.plot_precision_recall_curves(model_results, 'results/pr_curves.png')
+    evaluator.plot_roc_curves(model_results, str(results_dir / 'roc_curves.png'))
+    evaluator.plot_precision_recall_curves(model_results, str(results_dir / 'pr_curves.png'))
     evaluator.plot_feature_importance(
         X_train_scaled.columns.tolist(),
         models.feature_importance,
-        save_path='results/feature_importance.png'
+        save_path=str(results_dir / 'feature_importance.png')
     )
-    evaluator.plot_confusion_matrices(model_results, 'results/confusion_matrices.png')
-    evaluator.create_interactive_dashboard(model_results, 'results/dashboard.html')
+    evaluator.plot_confusion_matrices(model_results, str(results_dir / 'confusion_matrices.png'))
+    evaluator.create_interactive_dashboard(model_results, str(results_dir / 'dashboard.html'))
 
     logging.info("Saving models...")
-    models.save_models('results/model')
+    models.save_models(str(results_dir / 'model'))
 
     summary = {
         'optimal_threshold': float(optimal_threshold),
@@ -144,7 +155,7 @@ def main():
         }
     }
 
-    with open('results/summary.json', 'w') as f:
+    with open(results_dir / 'summary.json', 'w') as f:
         json.dump(summary, f, indent=2)
 
     logging.info("Pipeline complete. Results in results/")

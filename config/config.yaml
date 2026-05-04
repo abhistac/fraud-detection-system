@@ -1,17 +1,14 @@
-# Model Configuration  
 model:
   test_size: 0.2
   random_state: 42
   cv_folds: 3
 
-# Feature Engineering
 features:
   time_features: true
   amount_features: true
   pca_combinations: true
   rolling_statistics: false
 
-# Model Parameters (Optimized for speed)
 models:
   logistic_regression:
     C: 0.1
@@ -35,13 +32,11 @@ models:
     learning_rate: 0.1
     class_weight: 'balanced'
 
-# Evaluation
 evaluation:
   threshold_optimization: true
   business_metrics: true
   feature_importance: true
 
-# Business Parameters
 business:
   investigation_cost_per_case: 50
   fraud_prevention_value: 1.0
